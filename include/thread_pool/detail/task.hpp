@@ -1,0 +1,1 @@
+// type-erased task wrapper (move-only, exception-safe)

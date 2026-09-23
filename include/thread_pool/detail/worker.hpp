@@ -1,0 +1,1 @@
+// per-worker: local deque + thread handle
