@@ -24,6 +24,9 @@ if (THREAD_POOL_BUILD_TESTS)
   add_executable(thread_pool_test tests/thread_pool_test.cpp)
   target_link_libraries(thread_pool_test PRIVATE thread_pool)
   add_test(NAME thread_pool_test COMMAND thread_pool_test)
+  # Known libstdc++ exception_ptr false positive under TSan; see tsan.supp.
+  set_tests_properties(thread_pool_test PROPERTIES
+    ENVIRONMENT "TSAN_OPTIONS=suppressions=${PROJECT_SOURCE_DIR}/tsan.supp")
 endif()
 
 set(_targets thread_pool rooster)

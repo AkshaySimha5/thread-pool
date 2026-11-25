@@ -1,0 +1,11 @@
+# ThreadSanitizer suppressions for known FALSE POSITIVES in libstdc++.
+#
+# When a task throws, the exception object is shared (ref-counted) between the
+# worker thread's future state and the thread that calls future::get(). The
+# refcount hand-off happens inside libstdc++.so, which is not compiled with
+# TSan, so TSan cannot see the release/acquire ordering and reports a race
+# between the reader of e.what() and whichever thread frees the object last.
+# Reproduced WITHOUT this project: plain std::packaged_task + std::thread.
+#
+# Narrow on purpose: only destruction of a future's stored result.
+race:std::__future_base::_Result*::~_Result

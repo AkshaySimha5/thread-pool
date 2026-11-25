@@ -1,6 +1,7 @@
 // Dependency-free test runner (swap for GoogleTest/Catch2 later via FetchContent).
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -78,6 +79,51 @@ void concurrent_submitters() {
     CHECK(n == 4000);
 }
 
+void shutdown_drains_queued_tasks() {
+    // One worker, blocked on a gate, so the other 200 tasks are provably
+    // still QUEUED when shutdown() starts.
+    std::atomic<int> n{0};
+    std::promise<void> gate;
+    std::shared_future<void> gate_f = gate.get_future().share();
+    ThreadPool pool(1);
+    pool.submit([gate_f] { gate_f.wait(); });
+    for (int i = 0; i < 200; ++i) pool.submit([&n] { ++n; });
+
+    std::thread opener([&gate] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        gate.set_value();
+    });
+    pool.shutdown();  // must wait for all 200 queued tasks
+    opener.join();
+    CHECK(n == 200);
+}
+
+void submit_after_shutdown_throws() {
+    ThreadPool pool(2);
+    pool.shutdown();
+    bool threw = false;
+    try { pool.submit([] {}); } catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+}
+
+void shutdown_is_idempotent() {
+    std::atomic<int> n{0};
+    {
+        ThreadPool pool(2);
+        pool.submit([&n] { ++n; });
+        pool.shutdown();
+        pool.shutdown();  // second call is a no-op
+    }                     // destructor calls it a third time
+    CHECK(n == 1);
+}
+
+void futures_valid_after_shutdown() {
+    ThreadPool pool(2);
+    auto f = pool.submit([] { return 5; });
+    pool.shutdown();
+    CHECK(f.get() == 5);  // accepted task ran before workers exited
+}
+
 void zero_threads_rejected() {
     bool threw = false;
     try { ThreadPool pool(0); } catch (const std::invalid_argument&) { threw = true; }
@@ -92,5 +138,9 @@ int main() {
     many_tasks_all_run();
     concurrent_submitters();
     zero_threads_rejected();
+    shutdown_drains_queued_tasks();
+    submit_after_shutdown_throws();
+    shutdown_is_idempotent();
+    futures_valid_after_shutdown();
     std::cout << "all tests passed\n";
 }

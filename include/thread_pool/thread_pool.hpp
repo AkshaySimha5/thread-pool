@@ -6,6 +6,7 @@
 #include <future>
 #include <mutex>
 #include <queue>
+#include <stop_token>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -23,10 +24,13 @@ namespace thread_pool {
  * - submit() is thread-safe and returns a std::future for the result.
  * - Exceptions thrown by a task are captured and rethrown from future::get();
  *   they never escape into (and kill) a worker thread.
- * - Shutdown DRAINS: the destructor lets workers finish every task already
- *   queued, then joins them. Queued tasks are never discarded.
+ * - Shutdown DRAINS: shutdown() (and the destructor, which calls it) lets
+ *   workers finish every task already accepted, then joins them. Accepted
+ *   tasks are never discarded.
  * - submit() after shutdown has begun throws std::runtime_error.
- *
+ * - Workers are std::jthread; they sleep on a stop_token-aware condition
+ *   variable, so a stop request wakes them without a hand-rolled flag.
+ * 
  * Non-goals (for now): task dependencies, work stealing, priorities.
  */
 class ThreadPool {
@@ -40,6 +44,14 @@ public:
     // would leave them pointing at the moved-from object.
     ThreadPool(ThreadPool&&) = delete;
     ThreadPool& operator=(ThreadPool&&) = delete;
+    /**
+     * @brief Stop accepting tasks, finish all accepted tasks, join workers.
+     *
+     * Idempotent: later calls (including the destructor's) are no-ops.
+     * Must not be called from a worker thread (a thread cannot join itself)
+     * and must not race with another shutdown() call.
+     */
+    void shutdown();
 
     /**
      * @brief Submit a callable (plus arguments) for execution.
@@ -71,14 +83,20 @@ public:
 
 private:
     void enqueue(detail::Task task);
-    void worker_loop();
+    void worker_loop(std::stop_token st);
 
-    std::vector<std::thread> workers_;
     std::queue<detail::Task> tasks_;
 
     std::mutex mutex_;
-    std::condition_variable condition_;
-    bool stop_ = false;  // guarded by mutex_
+    // stop_token-aware wait().
+    std::condition_variable_any condition_;
+    bool stopping_ = false;  // guarded by mutex_
+
+    // MUST stay the last member. Members are destroyed in reverse order, so
+    // the jthreads (whose destructors request stop and join) are torn down
+    // BEFORE the queue/mutex/condvar the workers use. This also makes a
+    // constructor that throws part-way clean up correctly, with no try/catch.
+    std::vector<std::jthread> workers_;
 };
 
 }  // namespace thread_pool
