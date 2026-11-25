@@ -1,97 +1,84 @@
 #pragma once
 
+#include <condition_variable>
 #include <cstddef>
 #include <functional>
-#include <vector>
+#include <future>
+#include <mutex>
 #include <queue>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
-namespace thread_pool{
+#include "thread_pool/detail/task.hpp"
+
+namespace thread_pool {
+
 /**
  * @brief A fixed-size thread pool for executing tasks asynchronously.
  *
- * High-level guarantees (initial version):
- * - Starts N worker threads on construction.
- * - Allows submitting tasks for execution.
- * - Ensures all worker threads are stopped on destruction.
+ * Guarantees:
+ * - Starts N worker threads on construction (N > 0, else invalid_argument).
+ * - submit() is thread-safe and returns a std::future for the result.
+ * - Exceptions thrown by a task are captured and rethrown from future::get();
+ *   they never escape into (and kill) a worker thread.
+ * - Shutdown DRAINS: the destructor lets workers finish every task already
+ *   queued, then joins them. Queued tasks are never discarded.
+ * - submit() after shutdown has begun throws std::runtime_error.
  *
- * Non-goals (for now):
- * - No futures / return values
- * - No task dependencies
- * - No work stealing
- *
- * This is intentionally minimal.
+ * Non-goals (for now): task dependencies, work stealing, priorities.
  */
-class ThreadPool{
+class ThreadPool {
 public:
-    /**
-     * @brief Construct a thread pool with a fixed number of worker threads.
-     *
-     * @param thread_count Number of worker threads to start.
-     *
-     * Requirements / assumptions:
-     * - thread_count > 0
-     * - Threads start immediately and wait for work.
-     */
     explicit ThreadPool(std::size_t thread_count);
-
-    /**
-     * @brief Destructor.
-     *
-     * Guarantees:
-     * - No worker thread is running after destruction.
-     * - All internal resources are released.
-     *
-     * Open question (to be decided later):
-     * - Do we finish queued tasks or discard them?
-     */
     ~ThreadPool();
 
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
-    // copy operations deleted: forbidding duplicating threads, sharing queues, undefined ownerships
+    // Not movable either: worker threads hold `this`, so moving the pool
+    // would leave them pointing at the moved-from object.
+    ThreadPool(ThreadPool&&) = delete;
+    ThreadPool& operator=(ThreadPool&&) = delete;
 
     /**
-     * @brief Submit a task for execution.
+     * @brief Submit a callable (plus arguments) for execution.
      *
-     * The task:
-     * - Must be callable with no arguments.
-     * - Must not throw (for now).
+     * Arguments are decay-copied/moved into the task (like std::thread and
+     * std::async), so the task never holds dangling references. Use
+     * std::ref explicitly if you really want reference semantics.
      *
-     * Behavior:
-     * - The task is queued and eventually executed by a worker thread.
-     * - This call should be thread-safe.
-     *
-     * Open question:
-     * - What happens if submit() is called during shutdown?
+     * @return future for the callable's result (std::future<void> for void).
      */
-    void submit(std::function<void()> task);
+    template <typename F, typename... Args>
+        requires std::invocable<std::decay_t<F>, std::decay_t<Args>...>
+    auto submit(F&& f, Args&&... args)
+        -> std::future<std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>> {
+        using R = std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>;
+
+        // packaged_task = callable + promise. Running it stores the return
+        // value OR the thrown exception into the shared state behind the future.
+        std::packaged_task<R()> pt(
+            [fn = std::forward<F>(f),
+             ... captured = std::forward<Args>(args)]() mutable -> R {
+                return std::invoke(std::move(fn), std::move(captured)...);
+            });
+
+        std::future<R> result = pt.get_future();
+        enqueue(detail::Task(std::move(pt)));  // packaged_task is move-only: fine for Task
+        return result;
+    }
 
 private:
-    // Internal helper run by each worker thread.
+    void enqueue(detail::Task task);
     void worker_loop();
 
-private:
-    std::size_t thread_count_;
-
-    // Worker threads (std::thread for now; will migrate to std::jthread later)
-    // Example: std::vector<std::jthread>
-
     std::vector<std::thread> workers_;
-
-    // Task queue (exact data structure decided later)
-    // Example: std::queue<std::function<void()>>
-    
-    std::queue<std::function<void()>> tasks_;
-
-    // Synchronization primitives will live here
-    // Example: mutex, condition_variable, atomic flags
+    std::queue<detail::Task> tasks_;
 
     std::mutex mutex_;
     std::condition_variable condition_;
-    bool stop_;
+    bool stop_ = false;  // guarded by mutex_
 };
-} // namespace thread_pool
+
+}  // namespace thread_pool

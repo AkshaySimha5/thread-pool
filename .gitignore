@@ -1,25 +1,31 @@
-# Build directories
+# --- CMake build directories ---
 build/
-cmake-build-*/
-out/
+build-gcc/
+build-clang/
 
-# Compiled binaries / objects
+# Stray in-source CMake artifacts (if `cmake -S . -B .` is ever run by mistake instead of into a build dir)
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+CTestTestfile.cmake
+_deps/
+
+# --- Compiler / linker output ---
 *.o
 *.obj
+*.exe
+*.out
+*.pdb
+*.ilk
 *.a
 *.lib
 *.so
 *.dll
-*.exe
+*.dylib
 
-# CMake generated files
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-install_manifest.txt
-Makefile
-compile_commands.json
-
-# IDE/editor
+# --- Editor / tooling ---
 .vscode/
-.idea/
+
+# compile_commands.json is generated per build dir; regenerate rather than track it
+compile_commands.json
