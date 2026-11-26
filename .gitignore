@@ -1,6 +1,7 @@
 # --- CMake build directories ---
 build/
 build-gcc/
+build-gcc-rel/
 build-clang/
 
 # Stray in-source CMake artifacts (if `cmake -S . -B .` is ever run by mistake instead of into a build dir)

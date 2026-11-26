@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(THREAD_POOL_BUILD_TESTS "Build tests" ON)
+option(THREAD_POOL_BUILD_BENCHMARKS "Build benchmarks (downloads Google Benchmark)" OFF)
 set(THREAD_POOL_SANITIZE "" CACHE STRING "Sanitizer: thread, address, or undefined (empty = none)")
 
 find_package(Threads REQUIRED)
@@ -45,3 +46,7 @@ foreach(t IN LISTS _targets)
     target_compile_options(${t} PRIVATE /permissive- /W4)
   endif()
 endforeach()
+
+if (THREAD_POOL_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
